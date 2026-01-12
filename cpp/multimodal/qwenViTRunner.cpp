@@ -273,6 +273,8 @@ bool QwenViTRunner::allocateBuffer(cudaStream_t stream)
         "QwenViTRunner::mCuSeqlensDevice");
     mCuSeqlensHost = rt::Tensor(
         {mConfig.maxNumImages + 1}, rt::DeviceType::kCPU, nvinfer1::DataType::kINT64, "QwenViTRunner::mCuSeqlensHost");
+    mLastCuSeqlensHost = rt::Tensor({mConfig.maxNumImages + 1}, rt::DeviceType::kCPU, nvinfer1::DataType::kINT64,
+        "QwenViTRunner::mLastCuSeqlensHost");
 
     return true;
 }
@@ -416,24 +418,53 @@ void QwenViTRunner::imagePreprocess(rt::LLMGenerationRequest const& request,
     // Reshape tensors
     int64_t totalImageTokens = totalSeqLength / (mConfig.mergeSize * mConfig.mergeSize);
     mVitInput.reshape({totalSeqLength, mConfig.inputDim});
-    mAttentionMask.reshape({1, totalSeqLength, totalSeqLength});
-    mRotaryPosEmb.reshape({totalSeqLength, mConfig.vitPosEmbDim});
     mOutputEmbedding.reshape({totalImageTokens, mConfig.outHiddenSize});
-
     // Record performance data
     int64_t imageCount = std::accumulate(numImages.begin(), numImages.end(), int64_t(0));
     mMultimodalMetrics.recordRun(imageCount, totalImageTokens);
 
-    // Compute attention mask
-    CUDA_CHECK(cudaMemcpyAsync(mCuSeqlensDevice.rawPointer(), mCuSeqlensHost.rawPointer(),
-        cuSeqlensSize * sizeof(int64_t), cudaMemcpyHostToDevice, stream));
-    kernel::initAttentionMaskQwenViT(mCuSeqlensDevice, mAttentionMask, stream);
+    /*
+     * Cache-based optimization for ViT attention mask and rotary position embeddings.
+     *
+     * To improve inference speed, avoid recomputing tensors that remain unchanged between consecutive runs.
+     *
+     * 1. Attention Mask:
+     *    - If the current cumulative sequence lengths (`mCuSeqlensHost`) differ from the last inference
+     * (`mLastCuSeqlensHost`), recompute the attention mask.
+     *    - Otherwise, reuse the previously computed `mAttentionMask`.
+     *    - Steps include reshaping the mask, copying sequence lengths to device, and initializing the mask via kernel.
+     *    - After computation, `mCuSeqlensHost` is cached into `mLastCuSeqlensHost` for future comparisons.
+     *
+     * 2. Rotary Position Embeddings:
+     *    - Recomputed only if either:
+     *        a) `mCuSeqlensHost` has changed, or
+     *        b) the current image grid sizes (`imageGridTHWs`) differ from the last inference (`mLastImageGridTHWs`).
+     *    - If neither changed, the cached `mRotaryPosEmb` from the previous inference is reused.
+     *    - Steps include reshaping the embeddings and calling `initRotaryPosEmbQwenViT` for each image grid.
+     *
+     * This conditional caching ensures that expensive tensor computations are only performed when necessary,
+     * leveraging cached results whenever input shapes and sequence lengths remain constant between inferences.
+     */
 
-    // Compute rotary position embeddings
-    for (int64_t i = 0; i < imageGridTHWs.size(); ++i)
+    if (!rt::utils::tensorContentEqualCPU(mCuSeqlensHost, mLastCuSeqlensHost))
     {
-        kernel::initRotaryPosEmbQwenViT(
-            mRotaryPosEmb, imageGridTHWs[i], mConfig.mergeSize, cuSeqlensData[i], 10000.0f, 1.0f, stream);
+        mAttentionMask.reshape({1, totalSeqLength, totalSeqLength});
+        // Compute attention mask
+        CUDA_CHECK(cudaMemcpyAsync(mCuSeqlensDevice.rawPointer(), mCuSeqlensHost.rawPointer(),
+            cuSeqlensSize * sizeof(int64_t), cudaMemcpyHostToDevice, stream));
+        kernel::initAttentionMaskQwenViT(mCuSeqlensDevice, mAttentionMask, stream);
+        mCuSeqlensHost.deepCopyTo(mLastCuSeqlensHost);
+    }
+    if (!rt::utils::tensorContentEqualCPU(mCuSeqlensHost, mLastCuSeqlensHost) || imageGridTHWs != mLastImageGridTHWs)
+    {
+        mRotaryPosEmb.reshape({totalSeqLength, mConfig.vitPosEmbDim});
+        // Compute rotary position embeddings
+        for (int64_t i = 0; i < imageGridTHWs.size(); ++i)
+        {
+            kernel::initRotaryPosEmbQwenViT(
+                mRotaryPosEmb, imageGridTHWs[i], mConfig.mergeSize, cuSeqlensData[i], 10000.0f, 1.0f, stream);
+        }
+        mLastImageGridTHWs = imageGridTHWs;
     }
 
     // Compute additional inputs

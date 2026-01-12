@@ -181,6 +181,7 @@ private:
     rt::Tensor mMropePositionIdsDevice{};          //!< MRoPE position IDs device tensor
     rt::Tensor mCuSeqlensHost{};                   //!< Cumulative sequence lengths host tensor
     rt::Tensor mCuSeqlensDevice{};                 //!< Cumulative sequence lengths device tensor
+    rt::Tensor mLastCuSeqlensHost{};               //!< Used to determine whether ViT attention mask can be reused.
     // Qwen2.5-VL
     rt::Tensor mWindowAttentionMask{};      //!< Window attention mask
     rt::Tensor mWindowIndexHost{};          //!< Window index host tensor for window attention
@@ -196,6 +197,8 @@ private:
 
     int32_t mLLMMaxBatchSize{0};      //!< Maximum batch size from LLM engine
     int32_t mLLMMaxSequenceLength{0}; //!< Maximum sequence length from LLM engine
+
+    std::vector<std::vector<int64_t>> mLastImageGridTHWs; //!< Used to determine whether RoPE can be reused.
 };
 
 } // namespace rt
