@@ -316,46 +316,6 @@ void const* Tensor::rawPointer() const noexcept
     return data;
 }
 
-bool Tensor::deepCopyTo(Tensor& dst) const noexcept
-{
-    if (mDataType != dst.mDataType)
-    {
-        return false;
-    }
-
-    if (mShape != dst.mShape)
-    {
-        if (!dst.getOwnMemory() || !dst.reshape(mShape))
-        {
-            return false;
-        }
-    }
-
-    size_t const data_size = mShape.volume() * utils::getTypeSize(mDataType);
-
-    DeviceType const srcDev = mDeviceType;
-    DeviceType const dstDev = dst.mDeviceType;
-
-    if (srcDev == DeviceType::kCPU && dstDev == DeviceType::kCPU)
-    {
-        std::memcpy(dst.rawPointer(), rawPointer(), data_size);
-    }
-    else if (srcDev == DeviceType::kGPU && dstDev == DeviceType::kGPU)
-    {
-        CUDA_CHECK(cudaMemcpy(dst.rawPointer(), rawPointer(), data_size, cudaMemcpyDeviceToDevice));
-    }
-    else if (srcDev == DeviceType::kGPU && dstDev == DeviceType::kCPU)
-    {
-        CUDA_CHECK(cudaMemcpy(dst.rawPointer(), rawPointer(), data_size, cudaMemcpyDeviceToHost));
-    }
-    else
-    {
-        CUDA_CHECK(cudaMemcpy(dst.rawPointer(), rawPointer(), data_size, cudaMemcpyHostToDevice));
-    }
-
-    return true;
-}
-
 bool Tensor::reshape(Coords shape) noexcept
 {
     if (!ownMemory)

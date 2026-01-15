@@ -357,19 +357,6 @@ public:
     }
 
     /*!
-     * @brief Deep copy the contents of this tensor to another tensor
-     *
-     * Copies the tensor data to the destination tensor `dst`. If the shapes differ,
-     * the destination tensor will be reshaped if it owns its memory and has sufficient
-     * capacity; otherwise, the copy will fail. Uses `memcpy` for CPU and `cudaMemcpy` for GPU.
-     *
-     * @param dst Destination tensor to copy data into
-     * @return True if the copy succeeded, false otherwise (e.g., data type mismatch,
-     *         insufficient capacity, or destination does not own memory)
-     */
-    bool deepCopyTo(Tensor& dst) const noexcept;
-
-    /*!
      * @brief Reshape the tensor
      *
      * Explicitly disallows reshape when the memory is not owned by the tensor
@@ -441,6 +428,20 @@ double toGB(size_t bytes);
  * @return True if the tensors have identical contents, false otherwise
  */
 bool tensorContentEqualCPU(Tensor const& lhs, Tensor const& rhs);
+
+/*!
+ * @brief Deep copy tensor data from src to dst
+ *
+ * Copies all data from `src` into `dst`. If shapes differ, `dst` may be
+ * reshaped only if it owns its memory and has sufficient capacity.
+ *
+ * @param src Source tensor
+ * @param dst Destination tensor
+ * @param stream CUDA stream
+ * @return True on success, false on failure (e.g. type mismatch,
+ *         insufficient capacity, or dst does not own memory)
+ */
+bool deepCopyTo(Tensor const& src, Tensor& dst, cudaStream_t stream = nullptr);
 } // namespace utils
 
 //! @brief Optional input tensor type wrapper

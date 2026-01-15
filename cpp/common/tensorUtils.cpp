@@ -361,6 +361,56 @@ bool tensorContentEqualCPU(Tensor const& lhs, Tensor const& rhs)
     return std::memcmp(lhs.rawPointer(), rhs.rawPointer(), data_size) == 0;
 }
 
+bool deepCopyTo(Tensor const& src, Tensor& dst, cudaStream_t stream)
+{
+    if (src.getDataType() != dst.getDataType())
+    {
+        return false;
+    }
+
+    if (src.getShape() != dst.getShape())
+    {
+        if (!dst.getOwnMemory() || !dst.reshape(src.getShape()))
+        {
+            return false;
+        }
+    }
+
+    size_t const data_size = src.getShape().volume() * utils::getTypeSize(src.getDataType());
+
+    DeviceType const srcDev = src.getDeviceType();
+    DeviceType const dstDev = dst.getDeviceType();
+
+    cudaMemcpyKind cpyKind{};
+    if (srcDev == DeviceType::kCPU && dstDev == DeviceType::kCPU)
+    {
+        cpyKind = cudaMemcpyHostToHost;
+    }
+    else if (srcDev == DeviceType::kGPU && dstDev == DeviceType::kGPU)
+    {
+        cpyKind = cudaMemcpyDeviceToDevice;
+    }
+    else if (srcDev == DeviceType::kGPU && dstDev == DeviceType::kCPU)
+    {
+        cpyKind = cudaMemcpyDeviceToHost;
+    }
+    else
+    {
+        cpyKind = cudaMemcpyHostToDevice;
+    }
+
+    if (stream != nullptr)
+    {
+        CUDA_CHECK(cudaMemcpyAsync(dst.rawPointer(), src.rawPointer(), data_size, cpyKind, stream));
+    }
+    else
+    {
+        CUDA_CHECK(cudaMemcpy(dst.rawPointer(), src.rawPointer(), data_size, cpyKind));
+    }
+
+    return true;
+}
+
 } // namespace utils
 } // namespace rt
 } // namespace trt_edgellm

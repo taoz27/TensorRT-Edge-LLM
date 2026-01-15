@@ -424,28 +424,12 @@ void QwenViTRunner::imagePreprocess(rt::LLMGenerationRequest const& request,
     mMultimodalMetrics.recordRun(imageCount, totalImageTokens);
 
     /*
-     * Cache-based optimization for ViT attention mask and rotary position embeddings.
-     *
-     * To improve inference speed, avoid recomputing tensors that remain unchanged between consecutive runs.
-     *
-     * 1. Attention Mask:
-     *    - If the current cumulative sequence lengths (`mCuSeqlensHost`) differ from the last inference
-     * (`mLastCuSeqlensHost`), recompute the attention mask.
-     *    - Otherwise, reuse the previously computed `mAttentionMask`.
-     *    - Steps include reshaping the mask, copying sequence lengths to device, and initializing the mask via kernel.
-     *    - After computation, `mCuSeqlensHost` is cached into `mLastCuSeqlensHost` for future comparisons.
-     *
-     * 2. Rotary Position Embeddings:
-     *    - Recomputed only if either:
-     *        a) `mCuSeqlensHost` has changed, or
-     *        b) the current image grid sizes (`imageGridTHWs`) differ from the last inference (`mLastImageGridTHWs`).
-     *    - If neither changed, the cached `mRotaryPosEmb` from the previous inference is reused.
-     *    - Steps include reshaping the embeddings and calling `initRotaryPosEmbQwenViT` for each image grid.
-     *
-     * This conditional caching ensures that expensive tensor computations are only performed when necessary,
-     * leveraging cached results whenever input shapes and sequence lengths remain constant between inferences.
+     * Cache optimization for ViT attention mask and rotary position embeddings.
+     * Recompute attention mask only if cumulative sequence lengths change.
+     * Recompute rotary embeddings if sequence lengths or image grid sizes change.
+     * Otherwise, reuse cached tensors from the previous inference.
+     * This reduces inference latency by skipping invariant tensor initialization.
      */
-
     if (!rt::utils::tensorContentEqualCPU(mCuSeqlensHost, mLastCuSeqlensHost))
     {
         mAttentionMask.reshape({1, totalSeqLength, totalSeqLength});
@@ -453,7 +437,7 @@ void QwenViTRunner::imagePreprocess(rt::LLMGenerationRequest const& request,
         CUDA_CHECK(cudaMemcpyAsync(mCuSeqlensDevice.rawPointer(), mCuSeqlensHost.rawPointer(),
             cuSeqlensSize * sizeof(int64_t), cudaMemcpyHostToDevice, stream));
         kernel::initAttentionMaskQwenViT(mCuSeqlensDevice, mAttentionMask, stream);
-        mCuSeqlensHost.deepCopyTo(mLastCuSeqlensHost);
+        rt::utils::deepCopyTo(mCuSeqlensHost, mLastCuSeqlensHost, stream);
     }
     if (!rt::utils::tensorContentEqualCPU(mCuSeqlensHost, mLastCuSeqlensHost) || imageGridTHWs != mLastImageGridTHWs)
     {
