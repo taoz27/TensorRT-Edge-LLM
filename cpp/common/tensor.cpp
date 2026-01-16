@@ -86,12 +86,8 @@ std::array<int64_t, kMAX_DIMS> computeStrides(Coords const& shape)
 
 bool Coords::operator==(Coords const& other) const noexcept
 {
-    if (mNumDims != other.mNumDims)
-    {
-        return false;
-    }
-
-    return std::equal(mDims.begin(), mDims.begin() + mNumDims, other.mDims.begin());
+    return std::equal(
+        mDims.begin(), mDims.begin() + mNumDims, other.mDims.begin(), other.mDims.begin() + other.mNumDims);
 }
 
 bool Coords::operator!=(Coords const& other) const noexcept
